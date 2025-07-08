@@ -821,8 +821,37 @@ def generate_graphviz_files(all_configs, output_dir="output"):
     synthesis_flows = []  # Pour la cartographie de synthèse
     synthesis_sections = {}
     
+def sanitize_node_name(name):
+    """
+    Nettoie un nom de nœud pour qu'il soit valide en Graphviz
+    """
+    # Remplacer les caractères problématiques
+    sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', str(name))
+    # S'assurer que le nom ne commence pas par un chiffre
+    if sanitized and sanitized[0].isdigit():
+        sanitized = 'node_' + sanitized
+    # S'assurer que le nom n'est pas vide
+    if not sanitized:
+        sanitized = 'unnamed_node'
+    return sanitized
+
+def escape_label(label):
+    """
+    Échappe les caractères spéciaux dans les labels Graphviz
+    """
+    if not label:
+        return ""
+    # Échapper les guillemets et antislashes
+    escaped = str(label).replace('\\', '\\\\').replace('"', '\\"')
+    # Limiter la longueur pour éviter les labels trop longs
+    if len(escaped) > 50:
+        escaped = escaped[:47] + "..."
+    return escaped
+
     for config_file, (config_data, flow_data) in all_configs.items():
         filename = os.path.basename(config_file).replace('.conf', '')
+        # Nettoyer le nom de fichier
+        filename = sanitize_node_name(filename)
         dot_filename = os.path.join(output_dir, f"{filename}_flow.dot")
         
         if not flow_data['flows']:
@@ -830,7 +859,7 @@ def generate_graphviz_files(all_configs, output_dir="output"):
         
         # Ajouter à la synthèse
         for section_name, section_info in flow_data['sections'].items():
-            prefixed_name = f"{filename}_{section_name}"
+            prefixed_name = f"{filename}_{sanitize_node_name(section_name)}"
             synthesis_sections[prefixed_name] = {
                 'type': section_info['type'],
                 'content': section_info['content'],
@@ -839,11 +868,11 @@ def generate_graphviz_files(all_configs, output_dir="output"):
         
         for flow in flow_data['flows']:
             synthesis_flows.append({
-                'route': f"{filename}_{flow['route']}",
-                'source': f"{filename}_{flow['source']}",
+                'route': f"{filename}_{sanitize_node_name(flow['route'])}",
+                'source': f"{filename}_{sanitize_node_name(flow['source'])}",
                 'source_type': flow['source_type'],
                 'source_module': flow['source_module'],
-                'destination': f"{filename}_{flow['destination']}",
+                'destination': f"{filename}_{sanitize_node_name(flow['destination'])}",
                 'destination_type': flow['destination_type'],
                 'destination_module': flow['destination_module'],
                 'priority': flow['priority'],
@@ -860,13 +889,15 @@ def generate_graphviz_files(all_configs, output_dir="output"):
                 
                 # Titre
                 f.write(f'    labelloc="t";\n')
-                f.write(f'    label="Cartographie des flux NXLog - {filename}";\n\n')
+                f.write(f'    label="Cartographie des flux NXLog - {escape_label(filename)}";\n\n')
                 
                 # Définir les nœuds
                 for section_name, section_info in flow_data['sections'].items():
+                    safe_section_name = sanitize_node_name(section_name)
                     color = colors.get(section_info['type'], '#FFFFFF')
                     module = extract_module_from_content(section_info['content'])
-                    f.write(f'    "{section_name}" [fillcolor="{color}", label="{section_name}\\n({section_info["type"]})\\n{module}"];\n')
+                    label = f"{escape_label(section_name)}\\n({escape_label(section_info['type'])})\\n{escape_label(module)}"
+                    f.write(f'    "{safe_section_name}" [fillcolor="{color}", label="{label}"];\n')
                 
                 f.write('\n')
                 
@@ -875,24 +906,31 @@ def generate_graphviz_files(all_configs, output_dir="output"):
                 color_index = 0
                 
                 for flow in flow_data['flows']:
+                    safe_source = sanitize_node_name(flow['source'])
+                    safe_destination = sanitize_node_name(flow['destination'])
+                    
                     if flow['route'] not in route_color_map:
                         route_color_map[flow['route']] = route_colors[color_index % len(route_colors)]
                         color_index += 1
                     
                     edge_color = route_color_map[flow['route']]
-                    label = f"Route: {flow['route']}\\nPriorité: {flow['priority']}"
+                    label = f"Route: {escape_label(flow['route'])}\\nPriorité: {escape_label(flow['priority'])}"
                     if flow['condition'] != 'N/A':
-                        label += f"\\nCondition: {flow['condition'][:20]}..."
+                        condition_short = escape_label(flow['condition'][:20])
+                        if len(flow['condition']) > 20:
+                            condition_short += "..."
+                        label += f"\\nCondition: {condition_short}"
                     
-                    f.write(f'    "{flow["source"]}" -> "{flow["destination"]}" [color="{edge_color}", label="{label}"];\n')
+                    f.write(f'    "{safe_source}" -> "{safe_destination}" [color="{edge_color}", label="{label}"];\n')
                 
                 # Identifier les sections non connectées
                 connected_sections = set()
                 for flow in flow_data['flows']:
-                    connected_sections.add(flow['source'])
-                    connected_sections.add(flow['destination'])
+                    connected_sections.add(sanitize_node_name(flow['source']))
+                    connected_sections.add(sanitize_node_name(flow['destination']))
                 
-                unconnected_sections = set(flow_data['sections'].keys()) - connected_sections
+                all_sections = set(sanitize_node_name(name) for name in flow_data['sections'].keys())
+                unconnected_sections = all_sections - connected_sections
                 
                 if unconnected_sections:
                     f.write('\n    // Sections non connectées\n')
@@ -902,7 +940,7 @@ def generate_graphviz_files(all_configs, output_dir="output"):
                 # Légende
                 f.write('\n    // Légende\n')
                 f.write('    subgraph cluster_legend {\n')
-                f.write('        label="Légende";\n')
+                f.write('        label="Legende";\n')
                 f.write('        style=filled;\n')
                 f.write('        fillcolor=lightgray;\n')
                 
@@ -914,7 +952,7 @@ def generate_graphviz_files(all_configs, output_dir="output"):
                 ]
                 
                 for i, (type_name, color) in enumerate(legend_items):
-                    f.write(f'        legend_{i} [label="{type_name}", fillcolor="{color}", shape=box];\n')
+                    f.write(f'        legend_{i} [label="{escape_label(type_name)}", fillcolor="{color}", shape=box];\n')
                 
                 f.write('    }\n')
                 
@@ -987,7 +1025,7 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
             
             # Titre
             f.write('    labelloc="t";\n')
-            f.write('    label="Cartographie de Synthèse NXLog - Vue d\'ensemble";\n\n')
+            f.write('    label="Cartographie de Synthese NXLog - Vue d ensemble";\n\n')
             
             # Grouper les sections par fichier
             files_sections = defaultdict(list)
@@ -997,9 +1035,10 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
             # Créer les clusters par fichier
             cluster_index = 0
             for file_name, sections in files_sections.items():
+                safe_file_name = sanitize_node_name(file_name)
                 cluster_color = cluster_colors[cluster_index % len(cluster_colors)]
-                f.write(f'    subgraph cluster_{file_name} {{\n')
-                f.write(f'        label="{file_name}.conf";\n')
+                f.write(f'    subgraph cluster_{safe_file_name} {{\n')
+                f.write(f'        label="{escape_label(file_name)}.conf";\n')
                 f.write('        style=filled;\n')
                 f.write(f'        fillcolor="{cluster_color}";\n')
                 f.write('        fontsize=12;\n')
@@ -1007,10 +1046,16 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
                 
                 # Définir les nœuds de ce cluster
                 for section_name, section_info in sections:
+                    safe_section_name = sanitize_node_name(section_name)
                     color = colors.get(section_info['type'], '#FFFFFF')
                     module = extract_module_from_content(section_info['content'])
-                    clean_name = section_name.replace(f"{file_name}_", "")
-                    f.write(f'        "{section_name}" [fillcolor="{color}", label="{clean_name}\\n({section_info["type"]})\\n{module}"];\n')
+                    # Extraire le nom propre de la section (sans le préfixe du fichier)
+                    clean_name = section_name
+                    if section_name.startswith(f"{file_name}_"):
+                        clean_name = section_name[len(f"{file_name}_"):]
+                    
+                    label = f"{escape_label(clean_name)}\\n({escape_label(section_info['type'])})\\n{escape_label(module)}"
+                    f.write(f'        "{safe_section_name}" [fillcolor="{color}", label="{label}"];\n')
                 
                 f.write('    }\n\n')
                 cluster_index += 1
@@ -1021,15 +1066,22 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
             color_index = 0
             
             for flow in synthesis_flows:
+                safe_source = sanitize_node_name(flow['source'])
+                safe_destination = sanitize_node_name(flow['destination'])
+                
                 if flow['route'] not in route_color_map:
                     route_color_map[flow['route']] = route_colors[color_index % len(route_colors)]
                     color_index += 1
                 
                 edge_color = route_color_map[flow['route']]
-                clean_route = flow['route'].replace(f"{flow['file']}_", "")
-                label = f"{clean_route}\\nP:{flow['priority']}"
+                # Extraire le nom propre de la route (sans le préfixe du fichier)
+                clean_route = flow['route']
+                if flow['route'].startswith(f"{flow['file']}_"):
+                    clean_route = flow['route'][len(f"{flow['file']}_"):]
                 
-                f.write(f'    "{flow["source"]}" -> "{flow["destination"]}" [color="{edge_color}", label="{label}"];\n')
+                label = f"{escape_label(clean_route)}\\nP:{escape_label(flow['priority'])}"
+                
+                f.write(f'    "{safe_source}" -> "{safe_destination}" [color="{edge_color}", label="{label}"];\n')
             
             # Statistiques de synthèse
             total_files = len(files_sections)
@@ -1042,13 +1094,14 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
             f.write('        style=filled;\n')
             f.write('        fillcolor=lightyellow;\n')
             f.write('        fontsize=10;\n')
-            f.write(f'        stats [shape=note, label="Fichiers: {total_files}\\nSections: {total_sections}\\nFlux: {total_flows}"];\n')
+            stats_label = f"Fichiers: {total_files}\\nSections: {total_sections}\\nFlux: {total_flows}"
+            f.write(f'        stats [shape=note, label="{escape_label(stats_label)}"];\n')
             f.write('    }\n')
             
             # Légende
             f.write('\n    // Légende\n')
             f.write('    subgraph cluster_legend {\n')
-            f.write('        label="Légende";\n')
+            f.write('        label="Legende";\n')
             f.write('        style=filled;\n')
             f.write('        fillcolor=lightgray;\n')
             f.write('        fontsize=10;\n')
@@ -1061,7 +1114,7 @@ def generate_synthesis_graphviz(synthesis_flows, synthesis_sections, output_dir)
             ]
             
             for i, (type_name, color) in enumerate(legend_items):
-                f.write(f'        legend_{i} [label="{type_name}", fillcolor="{color}", shape=box];\n')
+                f.write(f'        legend_{i} [label="{escape_label(type_name)}", fillcolor="{color}", shape=box];\n')
             
             f.write('    }\n')
             
